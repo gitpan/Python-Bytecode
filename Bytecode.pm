@@ -3,7 +3,7 @@ use 5.6.0;
 
 use strict;
 
-our $VERSION = "2.0";
+our $VERSION = "2.4";
 
 use overload '""' => sub { my $obj = shift; 
     "<Code object ".$obj->{name}.", file ".$obj->{filename}." line ".$obj->{lineno}." at ".sprintf('0x%x>',0+$obj);
@@ -17,16 +17,19 @@ sub new {
 
     my $magic = $self->r_long();
     my $data = _get_data_by_magic($magic);
-    $self->r_long(); # Second magic number
-    $self->r_object();
-    $self->_init($data);
     $self->{version} = $Python::Bytecode::versions{$magic};
+    # What we use to read words from the source. May be r_short or r_long
+    *Python::Bytecode::r_word = $Python::Bytecode::readword{$magic};
+    $self->r_long(); # Second magic number
+    $self->{mainobj} = $self->r_object();
+    $self->_init($data);
     return $self;
 }
 
 sub _get_data_by_magic {
     require Python::Bytecode::v21;
     require Python::Bytecode::v22;
+    require Python::Bytecode::v23;
     my $magic = shift;
     unless (exists $Python::Bytecode::data{$magic}) {
         require Carp;
@@ -91,7 +94,10 @@ sub r_object {
         return [@tuple] unless wantarray;
         return @tuple;
     }
-    die "Oops! I didn't implement ".ord $type;
+    if ($type eq 'l') {
+      return $self->r_extralong();
+    }
+    die "Oops! I didn't implement ".ord($type) . " (".  length($type) .  " bytes)";
 }
 
 sub r_tuple {
@@ -104,28 +110,54 @@ sub r_tuple {
     return @rv;
 }
 
+# This is an extended precision long read. It'll likely be incorrect if the size of the
+# long exceeds the precision of perl's double, and it really ought to generate a
+# Math::BigInt instead.
+sub r_extralong {
+  my $self = shift;
+  my $n = $self->r_long;
+  my $size = $n<0 ? -$n : $n;
+  my $num = 0;
+
+  foreach (1..$size) {
+    my $digit = $self->r_short();
+    $num *= 32768;
+    $num += $digit;
+  }
+
+  return $num;
+
+}
+
 sub r_code {
-    my $self = shift;
-    $self->{argcount} = $self->r_short;
-    $self->{nlocals}  = $self->r_short;
-    $self->{stacksize}= $self->r_short;
-    $self->{flags}    = $self->r_short;
-    $self->{code}     = $self->r_object;
-    $self->{constants}= $self->r_object(1); # Cook these.
-    $self->{names}    = $self->r_object;
-    $self->{varnames} = $self->r_object;
-    $self->{freevars} = $self->r_object;
-    $self->{cellvars} = $self->r_object;
-    $self->{filename} = $self->r_object;
-    $self->{name}     = $self->r_object;
-    $self->{lineno}   = $self->r_short;
-    $self->{lnotab}   = $self->r_object;
+    my $file = shift;
+    my $self = bless {bytecode => $file}, 'Python::Bytecode::Codeobj';
+    $self->{argcount} = $file->r_word; #
+    $self->{nlocals}  = $file->r_word; #
+    $self->{stacksize}= $file->r_word; #
+    $self->{flags}    = $file->r_word; #
+    if ($self->{code}     = $file->r_object) {
+      if ($self->{constants}= $file->r_object(1)) {
+	if ($self->{names}    = $file->r_object) {
+	  if ($self->{varnames} = $file->r_object) {
+	    if ($self->{freevars} = $file->r_object) {
+	      if ($self->{cellvars} = $file->r_object) {
+		if ($self->{filename} = $file->r_object) {
+		  if ($self->{name}     = $file->r_object) {
+		    $self->{lineno}   = $file->r_word; # 
+		    $self->{lnotab}   = $file->r_object;
+		  }}}}}}}}
+    return $self;
 }
 
 for (qw(constants argcount nlocals stacksize flags code constants names
 varnames filename name lineno lnotab)) {
     no strict q/subs/;
-    eval "sub $_ { return \$_[0]->{$_} }";
+    eval "sub $_ { return \$_[0]->{mainobj}->$_ }";
+}
+
+sub version {
+    return $_[0]->{version};
 }
 
 $Parrot::Bytecode::DATA = <<EOF;
@@ -285,22 +317,36 @@ sub _init {
     $self->{c} = \%c;
 }
 
+sub disassemble {
+    my $self = shift;
+    return $self->{mainobj}->disassemble;
+}
+
 # Now we've read in the op tree, disassemble it.
+package Python::Bytecode::Codeobj;
+
+for (qw(constants argcount nlocals stacksize flags code constants names
+varnames filename name lineno lnotab)) {
+    no strict q/subs/;
+    eval "sub $_ { return \$_[0]->{$_} }";
+}
+
 
 sub findlabels {
     my $self = shift;
+    my $bytecode = $self->{bytecode};
     my %labels = ();
     my @code = @_;
     my $offset = 0;
     while (@code) {
         my $c = shift @code;
         $offset++;
-        if ($c>=$self->{c}{HAVE_ARGUMENT}) {
+        if ($c>=$bytecode->{c}{HAVE_ARGUMENT}) {
             my $arg = shift @code; 
             $arg += (256 * shift (@code));
             $offset += 2;
-            if ($self->{has}{jrel}{$c}) { $labels{$offset + $arg}++ };
-            if ($self->{has}{jabs}{$c}) { $labels{$offset}++ };
+            if ($bytecode->{has}{jrel}{$c}) { $labels{$offset + $arg}++ };
+            if ($bytecode->{has}{jabs}{$c}) { $labels{$offset}++ };
         }
     }
     return %labels; 
@@ -310,6 +356,7 @@ my @cmp_op   = ('<', '<=', '==', '!=', '>', '>=', 'in', 'not in', 'is', 'is not'
 
 sub disassemble {
     my $self = shift;
+    my $bytecode = $self->{bytecode};
     my @code = map { ord } split //, $self->{code};
     my %labels = $self->findlabels(@code);
     my $offset = 0;
@@ -322,25 +369,25 @@ sub disassemble {
         $text .= sprintf "%20s", $self->opname($c);
         $offset++;
         my $arg;
-        if ($c>=$self->{c}{HAVE_ARGUMENT}) {
+        if ($c>=$bytecode->{c}{HAVE_ARGUMENT}) {
             $arg = shift @code; 
             $arg += (256 * shift (@code)) + $extarg;
             $extarg = 0;
-            $extarg = $arg * 65535 if ($c == $self->{c}{EXTENDED_ARG});
+            $extarg = $arg * 65535 if ($c == $bytecode->{c}{EXTENDED_ARG});
             $offset+=2;
             $text .= sprintf "%5i", $arg;
-            $text .= " (".${$self->{constants}->[$arg]}.")" if ($self->{has}{const}{$c});
-            $text .= " (".$self->{varnames}->[$arg].")"  if ($self->{has}{"local"}{$c});
-            $text .= " [".$self->{names}->[$arg]."]"     if ($self->{has}{name}{$c});
-            $text .= " [".$cmp_op[$arg]."]"              if ($self->{has}{compare}{$c});
-            $text .= " (to ".($offset+$arg).")"          if ($self->{has}{jrel}{$c});
+            $text .= " (".${$self->{constants}->[$arg]}.")" if (ref $self->{constants}->[$arg] && $bytecode->{has}{const} && $bytecode->{has}{const}{$c});
+            $text .= " (".$self->{varnames}->[$arg].")"  if ($bytecode->{has}{"local"}{$c});
+            $text .= " [".$self->{names}->[$arg]."]"     if ($bytecode->{has}{name}{$c});
+            $text .= " [".$cmp_op[$arg]."]"              if ($bytecode->{has}{compare}{$c});
+            $text .= " (to ".($offset+$arg).")"          if ($bytecode->{has}{jrel}{$c});
         }
         push @dis, [$text, $c, $arg];
     }
     return @dis;
 }
 
-sub opname { $_[0]->{opnames}[$_[1]] }
+sub opname { $_[0]->{bytecode}{opnames}[$_[1]] }
 
 1;
 
@@ -355,6 +402,15 @@ Python::Bytecode - Disassemble and investigate Python bytecode
     my $bytecode = Python::Bytecode->new(FH);
     for ($bytecode->disassemble) {
         print $_->[0],"\n"; # Textual representation of disassembly
+    }
+
+    foreach my $constant (@{$bytecode->constants()}) {
+      if ($constant->can('disassemble')) {
+        print "code constant:\n";
+        for ($constant->disassemble) {
+          print $_->[0], "\n";
+        }
+      }
     }
 
 =head1 DESCRIPTION
@@ -377,7 +433,7 @@ the argument to the op, if any.
 
 =item C<constants>
 
-This returns an array reflecting the constants table of the bytecode.
+This returns an array reflecting the constants table of the code object.
 Some operations such as C<LOAD_CONST> refer to constants by index in
 this array.
 
@@ -401,9 +457,26 @@ There are other methods, but you can read the code to find them. It's
 not hard, and besides, it's probably easiest to work off the textual
 representation of the disassembly anyway.
 
-=head1 PERPETRATOR
+=head1 STRUCTURE
 
-Simon Cozens, C<simon@cpan.org>
+The structure of the decoded bytecode file is reasonably simple.
+
+The output of the C<new> method is an object that represents the fully
+parsed bytecode file. This object contains the information about the
+bytecode file, as well as the top-level code object for the file.
+
+Each python code object in the bytecode file has its own perl object
+that represents it. This object can be disassembled, has its own
+constants (which themselves may be code objects) and its own variables.
+
+The module completely decodes the bytecode object when the bytecode
+file is handed to the C<new> method, but to get all the pieces of the
+bytecode may require digging into the constants of each code object.
+
+=head1 PERPETRATORS
+
+Simon Cozens, C<simon@cpan.org>. Mutation for Python 2.3 by Dan
+Sugalski C<dan@sidhe.org>
 
 =head1 LICENSE
 

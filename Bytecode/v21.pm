@@ -10,6 +10,7 @@ for (@foo) {
             my $magic = $2 | ord("\r")<<16 | ord("\n")<<24;
             $Python::Bytecode::data{$magic} = $ds;
             $Python::Bytecode::versions{$1} = $magic;
+	    $Python::Bytecode::readword{$magic} = \&Python::Bytecode::r_short;
         }
     }
 }

@@ -5,7 +5,7 @@
 
 # change 'tests => 1' to 'tests => last_test_to_print';
 
-use Test::More tests => 4;
+use Test::More tests => 7;
 use Python::Bytecode;
 ok(1); # If we made it this far, we're ok.
 
@@ -35,6 +35,27 @@ is((join "\n", map { $_->[0] } $code->disassemble, (),""), <<EOF
 >>  33             POP_TOP
 >>  34          LOAD_CONST    1 ()
     37        RETURN_VALUE
+EOF
+);
+close IN;
+
+open IN, "test23.pyc" or die $!;
+my $code = Python::Bytecode->new(\*IN);
+ok(defined $code);
+is($code->filename, "./test23.py");
+is((join "\n", map { $_->[0] } $code->disassemble, (),""), <<EOF
+     0          LOAD_CONST    0 (2)
+     3          STORE_NAME    0 [a]
+     6           LOAD_NAME    0 [a]
+     9       JUMP_IF_FALSE    9 (to 21)
+    12             POP_TOP
+    13           LOAD_NAME    0 [a]
+    16          PRINT_ITEM
+    17       PRINT_NEWLINE
+    18        JUMP_FORWARD    1 (to 22)
+>>  21             POP_TOP
+>>  22          LOAD_CONST    1 ()
+    25        RETURN_VALUE
 EOF
 );
 

@@ -1,4 +1,4 @@
-package Python::Bytecode::v22;
+package Python::Bytecode::v23;
 
 local $/;
 my @foo = split /Magic:/, <DATA>;
@@ -10,7 +10,7 @@ for (@foo) {
             my $magic = $2 | ord("\r")<<16 | ord("\n")<<24;
             $Python::Bytecode::data{$magic} = $ds;
             $Python::Bytecode::versions{$1} = $magic;
-	    $Python::Bytecode::readword{$magic} = \&Python::Bytecode::r_short;
+	    $Python::Bytecode::readword{$magic} = \&Python::Bytecode::r_long;
         }
     }
 }
@@ -18,8 +18,8 @@ for (@foo) {
 1;
 
 __DATA__
-Magic: 
-    2.2.1 - 60717
+Magic:
+    2.3.3 - 62011
 
 Opcodes:
 
@@ -97,7 +97,7 @@ def_op('LOAD_LOCALS', 82)
 def_op('RETURN_VALUE', 83)
 def_op('IMPORT_STAR', 84)
 def_op('EXEC_STMT', 85)
-def_op('YIELD_STMT', 86)
+def_op('YIELD_VALUE', 86)
 
 def_op('POP_BLOCK', 87)
 def_op('END_FINALLY', 88)
@@ -131,7 +131,7 @@ jrel_op('JUMP_FORWARD', 110)    # Number of bytes to skip
 jrel_op('JUMP_IF_FALSE', 111)   # ""
 jrel_op('JUMP_IF_TRUE', 112)    # ""
 jabs_op('JUMP_ABSOLUTE', 113)   # Target byte offset from beginning of code
-jrel_op('FOR_LOOP', 114)        # Number of bytes to skip
+#jrel_op('FOR_LOOP', 114)        # Number of bytes to skip
 
 name_op('LOAD_GLOBAL', 116)     # Index in name list
 
