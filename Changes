@@ -1,5 +1,10 @@
 Revision history for Perl extension Python::Bytecode.
 
+1.01  Thu Dec 13 14:39:30 2001
+    - name should be called opname
+    - added "raw" option so that constants etc. come out as
+      objects, giving them typing information.
+
 0.01  Thu Dec 13 11:43:18 2001
 	- original version; created by h2xs 1.21 with options
 		-XA -n Python::Bytecode

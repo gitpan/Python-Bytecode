@@ -3,7 +3,7 @@ use 5.6.0;
 
 use strict;
 
-our $VERSION = "1.00";
+our $VERSION = "1.01";
 
 use overload '""' => sub { my $obj = shift; 
     "<Code object ".$obj->{name}.", file ".$obj->{filename}." line ".$obj->{lineno}." at ".sprintf('0x%x>',0+$obj);
@@ -56,25 +56,33 @@ sub r_string {
     return $buf;
 }
 
-sub r_object () {
+sub r_object (;$) {
+    my $cooked = shift;
     my $type = chr r_byte();
-    return r_string if $type eq "s";
     return r_code() if $type eq "c";
-    return r_long() if $type eq "i";
+    if ($cooked) { 
+        return bless \(r_string), "Python::Bytecode::String" if $type eq "s";
+        return bless \(r_long()), "Python::Bytecode::Long"   if $type eq "i";
+        return bless \do{my $x=undef}, "Python::Bytecode::Undef"   if $type eq "N";
+    } else {
+        return r_string if $type eq "s";
+        return r_long() if $type eq "i";
+        return undef if $type eq "N"; # None indeed.
+    }
     if ($type eq "(") {
-        my @tuple = r_tuple();
+        my @tuple = r_tuple($cooked);
         return [@tuple] unless wantarray;
         return @tuple;
     }
-    return undef if $type eq "N"; # None indeed.
     die "Oops! I didn't implement ".ord $type;
 }
 
-sub r_tuple {
+sub r_tuple(;$) {
+    my $cooked = shift;
     my $n = r_long;
     return () unless $n;
     my @rv;
-    push @rv, scalar r_object for (1..$n);
+    push @rv, scalar r_object($cooked) for (1..$n);
     return @rv;
 }
 
@@ -85,7 +93,7 @@ sub r_code {
     $x{stacksize}= r_short;
     $x{flags}    = r_short;
     $x{code}     = r_object;
-    $x{constants}= r_object;
+    $x{constants}= r_object(1); # Cook these.
     $x{names}    = r_object;
     $x{varnames} = r_object;
     $x{filename} = r_object;
@@ -295,7 +303,7 @@ sub disassemble {
             $extarg = $arg * 65535 if ($c == $c{EXTENDED_ARG});
             $offset+=2;
             $text .= sprintf "%5i", $arg;
-            $text .= " (".$_[0]->{constants}->[$arg].")" if ($has{const}{$c});
+            $text .= " (".${$_[0]->{constants}->[$arg]}.")" if ($has{const}{$c});
             $text .= " (".$_[0]->{varnames}->[$arg].")"  if ($has{"local"}{$c});
             $text .= " [".$_[0]->{names}->[$arg]."]"     if ($has{name}{$c});
             $text .= " [".$cmp_op[$arg]."]"              if ($has{compare}{$c});
@@ -306,7 +314,7 @@ sub disassemble {
     return @dis;
 }
 
-sub name { $opnames[$_[0]] }
+sub opname { $opnames[$_[0]] }
 
 1;
 
@@ -338,7 +346,7 @@ This is the basic method for getting at the actual code. It returns an
 array representing the individual operations in the bytecode stream.
 Each element is a reference to a three-element array containing
 a textual representation of the disassembly, the opcode number, (the
-C<name()> function can be used to turn this into an op name) and
+C<opname()> function can be used to turn this into an op name) and
 the argument to the op, if any.
 
 =item C<constants>
