@@ -3,7 +3,7 @@ use 5.6.0;
 
 use strict;
 
-our $VERSION = "2.4";
+our $VERSION = "2.5";
 
 use overload '""' => sub { my $obj = shift; 
     "<Code object ".$obj->{name}.", file ".$obj->{filename}." line ".$obj->{lineno}." at ".sprintf('0x%x>',0+$obj);
@@ -47,6 +47,7 @@ sub r_byte {
 }
 
 sub r_long {
+    use integer;
     my $self = shift;
     my $x = $self->r_byte;
     $x |= $self->r_byte << 8;
@@ -75,6 +76,53 @@ sub r_string {
     return $buf;
 }
 
+sub r_unicode { 
+    my $self = shift;
+    my $length = $self->r_long; 
+    my $buf; 
+    if ( exists $self->{stuff}) {
+        $buf = join "", splice ( @{$self->{stuff}},0,$length,() );
+    } else {
+        read $self->{fh}, $buf, $length; 
+    }
+    return $buf;
+}
+
+sub r_float {
+    my $self = shift;
+    my $length = $self->r_byte;
+    my $buf; 
+    if ( exists $self->{stuff}) {
+        $buf = join "", splice ( @{$self->{stuff}},0,$length,() );
+    } else {
+        read $self->{fh}, $buf, $length; 
+    }
+    $buf += 0;
+    return $buf;
+}
+
+sub r_complex {
+    my $self = shift;
+    my $length = $self->r_byte;
+    my $real; 
+    if ( exists $self->{stuff}) {
+        $real = join "", splice ( @{$self->{stuff}},0,$length,() );
+    } else {
+        read $self->{fh}, $real, $length; 
+    }
+    $real += 0;
+
+    $length = $self->r_byte;
+    my $imag; 
+    if ( exists $self->{stuff}) {
+        $imag = join "", splice ( @{$self->{stuff}},0,$length,() );
+    } else {
+        read $self->{fh}, $imag, $length; 
+    }
+    $imag += 0;
+    return bless([$real, $imag], "Python::Bytecode::Complex");
+}
+
 sub r_object {
     my $self = shift;
     my $cooked = shift;
@@ -94,8 +142,17 @@ sub r_object {
         return [@tuple] unless wantarray;
         return @tuple;
     }
+    if ($type eq 'u') {
+      return bless\($self->r_unicode()), "Python::Bytecode::Unicode";
+    }
     if ($type eq 'l') {
       return $self->r_extralong();
+    }
+    if ($type eq 'f') {
+      return $self->r_float();
+    }
+    if ($type eq 'x') {
+      return $self->r_complex();
     }
     die "Oops! I didn't implement ".ord($type) . " (".  length($type) .  " bytes)";
 }
@@ -325,6 +382,10 @@ sub disassemble {
 # Now we've read in the op tree, disassemble it.
 package Python::Bytecode::Codeobj;
 
+use overload '""' => sub { my $obj = shift; 
+    "<Code object ".$obj->{name}.", file ".$obj->{filename}." line ".$obj->{lineno}." at ".sprintf('0x%x>',0+$obj);
+    }, "0+" => sub { $_[0] }, fallback => 1;
+
 for (qw(constants argcount nlocals stacksize flags code constants names
 varnames filename name lineno lnotab)) {
     no strict q/subs/;
@@ -376,7 +437,7 @@ sub disassemble {
             $extarg = $arg * 65535 if ($c == $bytecode->{c}{EXTENDED_ARG});
             $offset+=2;
             $text .= sprintf "%5i", $arg;
-            $text .= " (".${$self->{constants}->[$arg]}.")" if (ref $self->{constants}->[$arg] && $bytecode->{has}{const} && $bytecode->{has}{const}{$c});
+            $text .= " (".$self->{constants}->[$arg].")" if (ref $self->{constants}->[$arg] && $bytecode->{has}{const} && $bytecode->{has}{const}{$c});
             $text .= " (".$self->{varnames}->[$arg].")"  if ($bytecode->{has}{"local"}{$c});
             $text .= " [".$self->{names}->[$arg]."]"     if ($bytecode->{has}{name}{$c});
             $text .= " [".$cmp_op[$arg]."]"              if ($bytecode->{has}{compare}{$c});
