@@ -1,5 +1,9 @@
 Revision history for Perl extension Python::Bytecode.
 
+2.6   Thu Jul 15 23:23:03 2004
+    - All returned constants are now blessed into some Python::Bytecode
+      class for easy identification
+
 2.0   Tue Oct  8 14:38:04 2002
     - Much more OO
     - Supports multiple P::B objects

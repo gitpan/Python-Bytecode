@@ -3,7 +3,7 @@ use 5.6.0;
 
 use strict;
 
-our $VERSION = "2.5";
+our $VERSION = "2.6";
 
 use overload '""' => sub { my $obj = shift; 
     "<Code object ".$obj->{name}.", file ".$obj->{filename}." line ".$obj->{lineno}." at ".sprintf('0x%x>',0+$obj);
@@ -76,6 +76,8 @@ sub r_string {
     return $buf;
 }
 
+# This really ought to return a real unicode string, rather than a plain 
+# binary string that we fib about
 sub r_unicode { 
     my $self = shift;
     my $length = $self->r_long; 
@@ -139,17 +141,17 @@ sub r_object {
     }
     if ($type eq "(") {
         my @tuple = $self->r_tuple($cooked);
-        return [@tuple] unless wantarray;
+        return bless [@tuple], "Python::Bytecode::Tuple"  unless wantarray;
         return @tuple;
     }
     if ($type eq 'u') {
       return bless\($self->r_unicode()), "Python::Bytecode::Unicode";
     }
     if ($type eq 'l') {
-      return $self->r_extralong();
+      return bless \($self->r_extralong()), "Python::Bytecode::Extralong";
     }
     if ($type eq 'f') {
-      return $self->r_float();
+      return bless \($self->r_float()), "Python::Bytecode::Float";
     }
     if ($type eq 'x') {
       return $self->r_complex();
