@@ -15,6 +15,7 @@ ok(1); # If we made it this far, we're ok.
 # its man page ( perldoc Test ) for help writing this test script.
 
 open IN, "test2.pyc" or die $!;
+binmode IN;
 my $code = Python::Bytecode->new(\*IN);
 ok(defined $code);
 is($code->filename, "test2.py");
@@ -40,6 +41,7 @@ EOF
 close IN;
 
 open IN, "test23.pyc" or die $!;
+binmode IN;
 my $code = Python::Bytecode->new(\*IN);
 ok(defined $code);
 is($code->filename, "./test23.py");

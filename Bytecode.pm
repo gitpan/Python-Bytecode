@@ -3,7 +3,7 @@ use 5.6.0;
 
 use strict;
 
-our $VERSION = "2.6";
+our $VERSION = "2.7";
 
 use overload '""' => sub { my $obj = shift; 
     "<Code object ".$obj->{name}.", file ".$obj->{filename}." line ".$obj->{lineno}." at ".sprintf('0x%x>',0+$obj);
@@ -209,8 +209,8 @@ sub r_code {
     return $self;
 }
 
-for (qw(constants argcount nlocals stacksize flags code constants names
-varnames filename name lineno lnotab)) {
+for (qw(argcount nlocals stacksize flags code constants names
+varnames freevars cellvars filename name lineno lnotab)) {
     no strict q/subs/;
     eval "sub $_ { return \$_[0]->{mainobj}->$_ }";
 }
@@ -388,8 +388,8 @@ use overload '""' => sub { my $obj = shift;
     "<Code object ".$obj->{name}.", file ".$obj->{filename}." line ".$obj->{lineno}." at ".sprintf('0x%x>',0+$obj);
     }, "0+" => sub { $_[0] }, fallback => 1;
 
-for (qw(constants argcount nlocals stacksize flags code constants names
-varnames filename name lineno lnotab)) {
+for (qw(argcount nlocals stacksize flags code constants names
+varnames freevars cellvars filename name lineno lnotab)) {
     no strict q/subs/;
     eval "sub $_ { return \$_[0]->{$_} }";
 }
@@ -417,6 +417,20 @@ sub findlabels {
 
 my @cmp_op   = ('<', '<=', '==', '!=', '>', '>=', 'in', 'not in', 'is', 'is not', 'exception match', 'BAD');
 
+sub __printconst {
+  my $thing = shift;
+
+  my $class = ref $thing;
+  if ($class =~ /String/ || $class =~ /Long/) {
+    return $$thing;
+  }
+  if ($class =~ /Undef/) {
+    return "";
+  }
+  return $thing;
+  
+}
+
 sub disassemble {
     my $self = shift;
     my $bytecode = $self->{bytecode};
@@ -439,7 +453,7 @@ sub disassemble {
             $extarg = $arg * 65535 if ($c == $bytecode->{c}{EXTENDED_ARG});
             $offset+=2;
             $text .= sprintf "%5i", $arg;
-            $text .= " (".$self->{constants}->[$arg].")" if (ref $self->{constants}->[$arg] && $bytecode->{has}{const} && $bytecode->{has}{const}{$c});
+            $text .= " (".__printconst($self->{constants}->[$arg]).")" if (ref $self->{constants}->[$arg] && $bytecode->{has}{const} && $bytecode->{has}{const}{$c});
             $text .= " (".$self->{varnames}->[$arg].")"  if ($bytecode->{has}{"local"}{$c});
             $text .= " [".$self->{names}->[$arg]."]"     if ($bytecode->{has}{name}{$c});
             $text .= " [".$cmp_op[$arg]."]"              if ($bytecode->{has}{compare}{$c});
