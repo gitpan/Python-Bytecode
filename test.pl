@@ -5,8 +5,7 @@
 
 # change 'tests => 1' to 'tests => last_test_to_print';
 
-use Test;
-BEGIN { plan tests => 4 };
+use Test::More tests => 4;
 use Python::Bytecode;
 ok(1); # If we made it this far, we're ok.
 
@@ -18,8 +17,8 @@ ok(1); # If we made it this far, we're ok.
 open IN, "test2.pyc" or die $!;
 my $code = Python::Bytecode->new(\*IN);
 ok(defined $code);
-ok($code->filename eq "test2.py");
-ok(join "\n", map { $_->[0] } $code->disassemble, () eq <<EOF
+is($code->filename, "test2.py");
+is((join "\n", map { $_->[0] } $code->disassemble, (),""), <<EOF
      0          SET_LINENO    0
      3          SET_LINENO    1
      6          LOAD_CONST    0 (2)

@@ -3,7 +3,7 @@ use 5.6.0;
 
 use strict;
 
-our $VERSION = "1.01";
+our $VERSION = "2.0";
 
 use overload '""' => sub { my $obj = shift; 
     "<Code object ".$obj->{name}.", file ".$obj->{filename}." line ".$obj->{lineno}." at ".sprintf('0x%x>',0+$obj);
@@ -11,98 +11,115 @@ use overload '""' => sub { my $obj = shift;
 
 sub new {
     my ($class, $fh) = (@_);
-    if (ref $fh) { 
-        $PyCompile::fh = $fh;
-    } else {
-        @PyCompile::stuff = split //, $fh;
+    my $self = bless { };
+    if (ref $fh) { $self->{fh} = $fh; } 
+    else { $self->{stuff} = [ split //, $fh ] }
+
+    my $magic = $self->r_long();
+    my $data = _get_data_by_magic($magic);
+    $self->r_long(); # Second magic number
+    $self->r_object();
+    $self->_init($data);
+    $self->{version} = $Python::Bytecode::versions{$magic};
+    return $self;
+}
+
+sub _get_data_by_magic {
+    require Python::Bytecode::v21;
+    require Python::Bytecode::v22;
+    my $magic = shift;
+    unless (exists $Python::Bytecode::data{$magic}) {
+        require Carp;
+        Carp::croak("Unrecognised magic number $magic; Only know Python versions "
+        . join ", ", map { "$_ ($Python::Bytecode::versions{$_})" } keys %Python::Bytecode::versions
+        );
     }
-
-    my $magic;
-    my $pycmagic = (50823 | (ord("\r")<<16) | (ord("\n")<<24));
-    die "Bad magic number $magic != $pycmagic" if ($magic =r_long()) != $pycmagic;
-    r_long(); # Second magic number
-    our $code = r_object();
-    return $code;
+    return $Python::Bytecode::data{$magic};
 }
 
-sub r_byte () { 
-    if (defined @PyCompile::stuff) { ord shift @PyCompile::stuff;}
-    else { ord getc $PyCompile::fh }
+sub r_byte { 
+    my $self = shift;
+    if (exists $self->{stuff}) { ord shift @{$self->{stuff}};}
+    else { ord getc $self->{fh} }
 }
 
-sub r_long () {
-    my $x = r_byte;
-    $x |= r_byte << 8;
-    $x |= r_byte << 16;
-    $x |= r_byte << 24;
+sub r_long {
+    my $self = shift;
+    my $x = $self->r_byte;
+    $x |= $self->r_byte << 8;
+    $x |= $self->r_byte << 16;
+    $x |= $self->r_byte << 24;
     return $x;
 }
 
-sub r_short () {
-    my $x = r_byte;
-    $x |= r_byte << 8;
+sub r_short {
+    my $self = shift;
+    my $x = $self->r_byte;
+    $x |= $self->r_byte << 8;
     $x |= -($x & 0x8000);
     return $x;
 }
 
 sub r_string { 
-    my $length = r_long; 
+    my $self = shift;
+    my $length = $self->r_long; 
     my $buf; 
-    if (defined @PyCompile::stuff) {
-        $buf = join "", splice ( @PyCompile::stuff,0,$length,() );
+    if ( exists $self->{stuff}) {
+        $buf = join "", splice ( @{$self->{stuff}},0,$length,() );
     } else {
-        read $PyCompile::fh, $buf, $length; 
+        read $self->{fh}, $buf, $length; 
     }
     return $buf;
 }
 
-sub r_object (;$) {
+sub r_object {
+    my $self = shift;
     my $cooked = shift;
-    my $type = chr r_byte();
-    return r_code() if $type eq "c";
+    my $type = chr $self->r_byte();
+    return $self->r_code() if $type eq "c";
     if ($cooked) { 
-        return bless \(r_string), "Python::Bytecode::String" if $type eq "s";
-        return bless \(r_long()), "Python::Bytecode::Long"   if $type eq "i";
+        return bless \($self->r_string()), "Python::Bytecode::String" if $type eq "s";
+        return bless \($self->r_long()), "Python::Bytecode::Long"   if $type eq "i";
         return bless \do{my $x=undef}, "Python::Bytecode::Undef"   if $type eq "N";
     } else {
-        return r_string if $type eq "s";
-        return r_long() if $type eq "i";
+        return $self->r_string if $type eq "s";
+        return $self->r_long() if $type eq "i";
         return undef if $type eq "N"; # None indeed.
     }
     if ($type eq "(") {
-        my @tuple = r_tuple($cooked);
+        my @tuple = $self->r_tuple($cooked);
         return [@tuple] unless wantarray;
         return @tuple;
     }
     die "Oops! I didn't implement ".ord $type;
 }
 
-sub r_tuple(;$) {
+sub r_tuple {
+    my $self = shift;
     my $cooked = shift;
-    my $n = r_long;
+    my $n = $self->r_long;
     return () unless $n;
     my @rv;
-    push @rv, scalar r_object($cooked) for (1..$n);
+    push @rv, scalar $self->r_object($cooked) for (1..$n);
     return @rv;
 }
 
 sub r_code {
-    my %x;
-    $x{argcount} = r_short;
-    $x{nlocals}  = r_short;
-    $x{stacksize}= r_short;
-    $x{flags}    = r_short;
-    $x{code}     = r_object;
-    $x{constants}= r_object(1); # Cook these.
-    $x{names}    = r_object;
-    $x{varnames} = r_object;
-    $x{filename} = r_object;
-    $x{name}     = r_object;
-    $x{lineno}   = r_short;
-    $x{lnotab}   = r_object;
-    my $obj = \%x;
-    bless $obj, __PACKAGE__;
-    return $obj;
+    my $self = shift;
+    $self->{argcount} = $self->r_short;
+    $self->{nlocals}  = $self->r_short;
+    $self->{stacksize}= $self->r_short;
+    $self->{flags}    = $self->r_short;
+    $self->{code}     = $self->r_object;
+    $self->{constants}= $self->r_object(1); # Cook these.
+    $self->{names}    = $self->r_object;
+    $self->{varnames} = $self->r_object;
+    $self->{freevars} = $self->r_object;
+    $self->{cellvars} = $self->r_object;
+    $self->{filename} = $self->r_object;
+    $self->{name}     = $self->r_object;
+    $self->{lineno}   = $self->r_short;
+    $self->{lnotab}   = $self->r_object;
 }
 
 for (qw(constants argcount nlocals stacksize flags code constants names
@@ -250,32 +267,40 @@ EXTENDED_ARG = 143
 EOF
 
 # Set up op code data structures
-my @opnames;
-my %c; # Natty constants.
-my %has;
-for (split /\n/, $Parrot::Bytecode::DATA) {
-    next if /^#/ or not /\S/;
-    if    (/^def_op\('([^']+)', (\d+)\)/) { $opnames[$2]=$1; } 
-    elsif (/^(jrel|jabs|name)_op\('([^']+)', (\d+)\)/) { $opnames[$3]=$2; $has{$1}{$3}++ } 
-    elsif (/(\w+)\s*=\s*(\d+)/) { $c{$1}=$2; }
-    elsif (/^has(\w+)\.append\((\d+)\)/) { $has{$1}{$2}++ }
+sub _init {
+    my $self = shift;
+    my $data = shift;
+    my @opnames;
+    my %c; # Natty constants.
+    my %has;
+    for (split /\n/, $data) { # This ought to come predigested, but I am lazy
+        next if /^#/ or not /\S/;
+        if    (/^def_op\('([^']+)', (\d+)\)/) { $opnames[$2]=$1; } 
+        elsif (/^(jrel|jabs|name)_op\('([^']+)', (\d+)\)/) { $opnames[$3]=$2; $has{$1}{$3}++ } 
+        elsif (/(\w+)\s*=\s*(\d+)/) { $c{$1}=$2; }
+        elsif (/^has(\w+)\.append\((\d+)\)/) { $has{$1}{$2}++ }
+    }
+    $self->{opnames} = \@opnames;
+    $self->{has} = \%has;
+    $self->{c} = \%c;
 }
 
 # Now we've read in the op tree, disassemble it.
 
 sub findlabels {
+    my $self = shift;
     my %labels = ();
     my @code = @_;
     my $offset = 0;
     while (@code) {
         my $c = shift @code;
         $offset++;
-        if ($c>=$c{HAVE_ARGUMENT}) {
+        if ($c>=$self->{c}{HAVE_ARGUMENT}) {
             my $arg = shift @code; 
             $arg += (256 * shift (@code));
             $offset += 2;
-            if ($has{jrel}{$c}) { $labels{$offset + $arg}++ };
-            if ($has{jabs}{$c}) { $labels{$offset}++ };
+            if ($self->{has}{jrel}{$c}) { $labels{$offset + $arg}++ };
+            if ($self->{has}{jabs}{$c}) { $labels{$offset}++ };
         }
     }
     return %labels; 
@@ -284,8 +309,9 @@ sub findlabels {
 my @cmp_op   = ('<', '<=', '==', '!=', '>', '>=', 'in', 'not in', 'is', 'is not', 'exception match', 'BAD');
 
 sub disassemble {
-    my @code = map { ord } split //, $_[0]->{code};
-    my %labels = findlabels(@code);
+    my $self = shift;
+    my @code = map { ord } split //, $self->{code};
+    my %labels = $self->findlabels(@code);
     my $offset = 0;
     my $extarg = 0;
     my @dis;
@@ -293,28 +319,28 @@ sub disassemble {
         my $c = shift @code;
         my $text = (($labels{$offset}) ? ">>" : "  ");
         $text .= sprintf "%4i", $offset;
-        $text .= sprintf "%20s", $opnames[$c];
+        $text .= sprintf "%20s", $self->opname($c);
         $offset++;
         my $arg;
-        if ($c>=$c{HAVE_ARGUMENT}) {
+        if ($c>=$self->{c}{HAVE_ARGUMENT}) {
             $arg = shift @code; 
             $arg += (256 * shift (@code)) + $extarg;
             $extarg = 0;
-            $extarg = $arg * 65535 if ($c == $c{EXTENDED_ARG});
+            $extarg = $arg * 65535 if ($c == $self->{c}{EXTENDED_ARG});
             $offset+=2;
             $text .= sprintf "%5i", $arg;
-            $text .= " (".${$_[0]->{constants}->[$arg]}.")" if ($has{const}{$c});
-            $text .= " (".$_[0]->{varnames}->[$arg].")"  if ($has{"local"}{$c});
-            $text .= " [".$_[0]->{names}->[$arg]."]"     if ($has{name}{$c});
-            $text .= " [".$cmp_op[$arg]."]"              if ($has{compare}{$c});
-            $text .= " (to ".($offset+$arg).")"          if ($has{jrel}{$c});
+            $text .= " (".${$self->{constants}->[$arg]}.")" if ($self->{has}{const}{$c});
+            $text .= " (".$self->{varnames}->[$arg].")"  if ($self->{has}{"local"}{$c});
+            $text .= " [".$self->{names}->[$arg]."]"     if ($self->{has}{name}{$c});
+            $text .= " [".$cmp_op[$arg]."]"              if ($self->{has}{compare}{$c});
+            $text .= " (to ".($offset+$arg).")"          if ($self->{has}{jrel}{$c});
         }
         push @dis, [$text, $c, $arg];
     }
     return @dis;
 }
 
-sub opname { $opnames[$_[0]] }
+sub opname { $_[0]->{opnames}[$_[1]] }
 
 1;
 
